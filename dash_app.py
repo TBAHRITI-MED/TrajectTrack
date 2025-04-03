@@ -82,22 +82,24 @@ st.set_page_config(
 # ---------------------------------------------------
 # Vous pouvez intégrer directement votre base de données dans Streamlit
 @st.cache_resource
+
 def init_db():
-    # Utiliser l'URL de la base de données depuis une variable d'environnement
-    db_url = os.getenv("DATABASE_URL", "sqlite:///sensor_data.db")  # Fallback à SQLite si pas de PostgreSQL
+    # Utiliser l'URL externe de la base de données PostgreSQL de Render
+    db_url = "postgresql://data_suivi_user:oYFlVBF6UAaRZk3el2vtXhVPtvOn9uzW@dpg-cuue8c52ng1s739p7grg-a.oregon-postgres.render.com/data_suivi"
+    
     engine = create_engine(db_url)
     Base = declarative_base()
     
     # Définir le modèle SensorData
     class SensorData(Base):
-        
         __tablename__ = 'sensor_data'
         id = Column(Integer, primary_key=True)
         latitude = Column(Float, nullable=False)
         longitude = Column(Float, nullable=False)
         speed = Column(Float, nullable=False)
+        # Pas de colonne timestamp pour éviter l'erreur précédente
     
-    # Créer les tables
+    # Créer les tables si elles n'existent pas
     Base.metadata.create_all(engine)
     
     # Créer une session
@@ -136,6 +138,7 @@ if 'selected_points' not in st.session_state:
 # ---------------------------------------------------
 # 3. Fonctions utilitaires
 # ---------------------------------------------------
+
 
 # Fonction pour calculer la distance entre deux points en mètres
 def haversine_distance(lat1, lon1, lat2, lon2):
@@ -678,7 +681,6 @@ page = st.sidebar.selectbox(
     "Choisir une page",
     ["Carte principale", "Analyse de vitesse", "Clusters", "Anomalies", "Statistiques", "Configuration"]
 )
-
 # Charger les données
 @st.cache_data(ttl=10)  # Cache pendant 10 secondes
 def load_data():
