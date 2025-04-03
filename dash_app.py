@@ -18,7 +18,7 @@ import threading
 import math
 import json  # Ajout de l'import json
 from sqlalchemy import create_engine, Column, Integer, Float, DateTime, func
-from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import declarative_base
 from sqlalchemy.orm import sessionmaker
 from openai import OpenAI
 # Supprimez la duplication
