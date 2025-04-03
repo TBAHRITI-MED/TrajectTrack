@@ -36,6 +36,8 @@ CORS(flask_app, resources={r"/api/*": {"origins": "*"}})
 
 @flask_app.route("/api/push_data", methods=["POST"])
 def api_push_data():
+    print("Requête reçue:", request.headers)
+    print("Données:", request.get_data())
     if not request.json:
         return jsonify({"error": "No JSON body"}), 400
 
