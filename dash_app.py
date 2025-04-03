@@ -27,8 +27,12 @@ from streamlit_folium import folium_static, st_folium
 from folium.plugins import HeatMap, MarkerCluster
 from flask import Flask, request, jsonify
 import threading
-# Créer une application Flask pour recevoir les données de l'app Swift
+from flask_cors import CORS
+
+# Dans la section où vous créez l'application Flask
 flask_app = Flask(__name__)
+CORS(flask_app, resources={r"/api/*": {"origins": "*"}}) 
+
 
 @flask_app.route("/api/push_data", methods=["POST"])
 def api_push_data():
