@@ -605,13 +605,17 @@ def get_all_points():
         data = []
         
         for p in points:
-            data.append({
+            point_data = {
                 "id": p.id,
                 "latitude": p.latitude,
                 "longitude": p.longitude,
-                "speed": p.speed,
-                "timestamp": p.timestamp.isoformat() if p.timestamp else None
-            })
+                "speed": p.speed
+            }
+            # Ajouter timestamp seulement s'il existe
+            if hasattr(p, 'timestamp') and p.timestamp:
+                point_data["timestamp"] = p.timestamp.isoformat()
+            
+            data.append(point_data)
         
         return {"status": "success", "points": data}
     except Exception as e:
@@ -632,9 +636,12 @@ def get_latest_point():
                 "latitude": latest.latitude,
                 "longitude": latest.longitude,
                 "speed": latest.speed,
-                "timestamp": latest.timestamp.isoformat() if latest.timestamp else None,
                 "is_latest": True
             }
+            
+            # Ajouter timestamp seulement s'il existe
+            if hasattr(latest, 'timestamp') and latest.timestamp:
+                point_data["timestamp"] = latest.timestamp.isoformat()
             
             # Obtenir les résultats ML
             ml_results = analyze_point(latest.latitude, latest.longitude, latest.speed)
