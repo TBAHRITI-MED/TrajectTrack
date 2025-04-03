@@ -84,12 +84,12 @@ def init_db():
     
     # Définir le modèle SensorData
     class SensorData(Base):
+        
         __tablename__ = 'sensor_data'
         id = Column(Integer, primary_key=True)
         latitude = Column(Float, nullable=False)
         longitude = Column(Float, nullable=False)
         speed = Column(Float, nullable=False)
-        timestamp = Column(DateTime, default=datetime.now)
     
     # Créer les tables
     Base.metadata.create_all(engine)
