@@ -28,6 +28,15 @@ from folium.plugins import HeatMap, MarkerCluster
 from flask import Flask, request, jsonify
 import threading
 from flask_cors import CORS
+from sklearn.cluster import KMeans
+from sklearn.neighbors import NearestNeighbors
+import numpy as np
+import pandas as pd
+import plotly.express as px
+import matplotlib.pyplot as plt
+import folium
+from streamlit_folium import folium_static
+from scipy.spatial.distance import cdist
 
 # Dans la section où vous créez l'application Flask
 flask_app = Flask(__name__)
@@ -72,7 +81,7 @@ def run_flask_server():
     flask_app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
 # Configuration de la page
 st.set_page_config(
-    page_title="Analyse de Données Spatiales",
+    page_title="Suivi de Trajectoire et Analyse de Données",
     page_icon="🗺️",
     layout="wide"
 )
@@ -252,6 +261,892 @@ def is_point_on_segment(lat_p, lon_p, lat_a, lon_a, lat_b, lon_b, width=30):
     dist = distance_point_to_line([lat_p, lon_p], [lat_a, lon_a], [lat_b, lon_b])
     return dist <= width
 
+# Code à ajouter dans votre application Streamlit
+# Ce code doit être intégré à votre fichier dash_app.py existant
+
+# --- Importations supplémentaires pour les nouveaux algorithmes ---
+from sklearn.cluster import KMeans
+from sklearn.neighbors import NearestNeighbors
+import numpy as np
+import pandas as pd
+import plotly.express as px
+import matplotlib.pyplot as plt
+import folium
+from streamlit_folium import folium_static
+from scipy.spatial.distance import cdist
+
+# --- Fonction pour le voisinage itératif ---
+def iterative_neighborhood(X, query_point, k, linkage='single'):
+    """
+    Calcule les k voisins de query_point de manière itérative
+    
+    Args:
+        X: array-like, données d'entrée
+        query_point: array-like, point à partir duquel chercher les voisins
+        k: int, nombre de voisins à trouver
+        linkage: str, méthode de liaison ('single', 'complete', 'average')
+        
+    Returns:
+        neighbors_indices: liste des indices des voisins trouvés
+    """
+    # Convertir en array numpy
+    X = np.array(X)
+    query_point = np.array(query_point).reshape(1, -1)
+    
+    # Initialiser le voisinage avec le point de requête
+    neighborhood = []
+    
+    # Si le point de requête est dans X, on l'ajoute en premier
+    query_in_X = False
+    for i, point in enumerate(X):
+        if np.array_equal(point, query_point.flatten()):
+            neighborhood.append(i)
+            query_in_X = True
+            break
+    
+    # Si le point de requête n'est pas dans X, on crée un voisinage vide
+    if not query_in_X:
+        # Nous allons comparer avec tous les points de X
+        pass
+    
+    # Continuer jusqu'à avoir k voisins
+    while len(neighborhood) < k:
+        min_dist = float('inf')
+        next_neighbor = -1
+        
+        # Parcourir tous les points qui ne sont pas encore dans le voisinage
+        for i in range(len(X)):
+            if i not in neighborhood:
+                # Calculer la distance selon la méthode de liaison
+                if linkage == 'single':
+                    # Liaison simple: distance minimale au voisinage actuel
+                    if len(neighborhood) == 0:
+                        dist = np.linalg.norm(X[i] - query_point)
+                    else:
+                        dist = min([np.linalg.norm(X[i] - X[j]) for j in neighborhood])
+                
+                elif linkage == 'complete':
+                    # Liaison complète: distance maximale au voisinage actuel
+                    if len(neighborhood) == 0:
+                        dist = np.linalg.norm(X[i] - query_point)
+                    else:
+                        dist = max([np.linalg.norm(X[i] - X[j]) for j in neighborhood])
+                
+                elif linkage == 'average':
+                    # Liaison moyenne: distance moyenne au voisinage actuel
+                    if len(neighborhood) == 0:
+                        dist = np.linalg.norm(X[i] - query_point)
+                    else:
+                        dist = sum([np.linalg.norm(X[i] - X[j]) for j in neighborhood]) / len(neighborhood)
+                
+                else:
+                    raise ValueError(f"Méthode de liaison '{linkage}' non reconnue")
+                
+                # Mettre à jour le voisin le plus proche
+                if dist < min_dist:
+                    min_dist = dist
+                    next_neighbor = i
+        
+        # Ajouter le prochain voisin au voisinage
+        if next_neighbor != -1:
+            neighborhood.append(next_neighbor)
+        else:
+            break  # Pas d'autres voisins trouvés
+    
+    return neighborhood
+
+# --- Fonction pour visualiser les résultats du clustering sur une carte ---
+def display_clustering_map(df, labels, algorithm_name, num_clusters=None):
+    """
+    Affiche une carte avec les points colorés selon leur cluster
+    
+    Args:
+        df: DataFrame avec les colonnes 'latitude' et 'longitude'
+        labels: array-like, étiquettes des clusters
+        algorithm_name: str, nom de l'algorithme utilisé
+        num_clusters: int, nombre de clusters (pour le titre)
+    """
+    # Créer une copie du DataFrame avec les labels
+    df_clusters = df.copy()
+    df_clusters['cluster'] = labels
+    
+    # Déterminer le nombre de clusters
+    if num_clusters is None:
+        num_clusters = len(set(labels)) - (1 if -1 in labels else 0)
+    
+    # Créer la carte
+    center =[49.2584, 4.0317]
+    m = folium.Map(location=center, zoom_start=13)
+    
+    # Palette de couleurs pour les clusters
+    colors = ['red', 'blue', 'green', 'purple', 'orange', 'darkred', 
+              'lightred', 'beige', 'darkblue', 'darkgreen', 'cadetblue', 
+              'darkpurple', 'pink', 'lightblue', 'lightgreen']
+    
+    # Ajouter les points à la carte
+    for idx, row in df_clusters.iterrows():
+        cluster_id = int(row['cluster'])
+        
+        # Couleur en fonction du cluster
+        if cluster_id == -1:
+            color = 'gray'  # Points de bruit
+            radius = 3
+        else:
+            color = colors[cluster_id % len(colors)]
+            radius = 5
+        
+        # Créer le marker
+        folium.CircleMarker(
+            [row['latitude'], row['longitude']],
+            radius=radius,
+            color=color,
+            fill=True,
+            fill_opacity=0.7,
+            popup=f"Cluster {cluster_id}" if cluster_id != -1 else "Bruit"
+        ).add_to(m)
+    
+    # Ajouter un titre à la carte
+    title_html = f'''
+        <h3 align="center" style="font-size:16px">
+            <b>Clustering avec {algorithm_name}: {num_clusters} clusters</b>
+        </h3>
+    '''
+    m.get_root().html.add_child(folium.Element(title_html))
+    
+    # Afficher la carte
+    return m
+
+# --- Code de l'interface utilisateur pour l'onglet Clustering Avancé ---
+def show_advanced_clustering_page():
+    st.header("🧩 Clustering et Classification Avancés")
+    
+    # Charger les données
+    df = load_data()
+    if len(df) == 0:
+        st.warning("Aucune donnée disponible pour l'analyse.")
+        return
+    
+    # Sélection des algorithmes
+    algorithm = st.sidebar.selectbox(
+        "Algorithme", 
+        ["K-Means", "DBSCAN", "Voisinage Itératif"]
+    )
+    
+    # Sélection des colonnes à utiliser pour le clustering
+    feature_options = list(df.columns)
+    
+    # Proposer automatiquement latitude et longitude
+    default_features = ["latitude", "longitude"]
+    default_features = [f for f in default_features if f in feature_options]
+    
+    selected_features = st.sidebar.multiselect(
+        "Caractéristiques à utiliser", 
+        feature_options,
+        default=default_features
+    )
+    
+    if not selected_features:
+        st.warning("Veuillez sélectionner au moins une caractéristique pour le clustering.")
+        return
+    
+    # Préparation des données
+    X = df[selected_features].values
+    
+    # Diviseur pour séparer les sections de l'interface
+    st.sidebar.markdown("---")
+    
+    # Interface pour K-Means
+    if algorithm == "K-Means":
+        st.subheader("Clustering avec K-Means")
+        
+        # Paramètres de K-Means
+        n_clusters = st.sidebar.slider("Nombre de clusters (k)", 2, 15, 5)
+        
+        # Description de l'algorithme
+        with st.expander("📖 Comment fonctionne K-Means ?"):
+            st.markdown("""
+            **K-Means** est un algorithme de clustering qui vise à partitionner n observations en k clusters, 
+            où chaque observation appartient au cluster avec la moyenne la plus proche (centroïde).
+            
+            **Fonctionnement**:
+            1. Initialiser k centroïdes aléatoirement
+            2. Assigner chaque point au centroïde le plus proche
+            3. Recalculer les centroïdes comme la moyenne des points assignés
+            4. Répéter les étapes 2 et 3 jusqu'à convergence
+            
+            **Avantages**:
+            - Simple à comprendre et à implémenter
+            - Efficace pour les grands ensembles de données
+            
+            **Inconvénients**:
+            - Sensible à l'initialisation des centroïdes
+            - Nécessite de spécifier le nombre de clusters à l'avance
+            - Fonctionne mieux avec des clusters de forme sphérique
+            """)
+        
+        # Bouton pour lancer le clustering
+        if st.button("Lancer K-Means"):
+            with st.spinner("Clustering en cours..."):
+                # Appliquer K-Means
+                kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
+                cluster_labels = kmeans.fit_predict(X)
+                
+                # Afficher les résultats
+                st.subheader("Résultats du clustering")
+                
+                # Ajouter les labels au DataFrame
+                df_result = df.copy()
+                df_result['cluster'] = cluster_labels
+                
+                # Créer la carte
+                m = display_clustering_map(df, cluster_labels, "K-Means", n_clusters)
+                folium_static(m, width=800, height=500)
+                
+                # Afficher les statistiques par cluster
+                st.subheader("Statistiques par cluster")
+                
+                # Calculer les statistiques
+                cluster_stats = []
+                for i in range(n_clusters):
+                    cluster_data = df_result[df_result['cluster'] == i]
+                    
+                    stats = {
+                        "Cluster": i,
+                        "Nombre de points": len(cluster_data),
+                        "% des points": f"{len(cluster_data) / len(df) * 100:.1f}%",
+                        "Centre (lat)": cluster_data['latitude'].mean(),
+                        "Centre (lon)": cluster_data['longitude'].mean()
+                    }
+                    
+                    # Ajouter la vitesse moyenne si disponible
+                    if 'speed' in df.columns:
+                        stats["Vitesse moyenne"] = f"{cluster_data['speed'].mean():.2f} m/s"
+                    
+                    cluster_stats.append(stats)
+                
+                # Afficher le tableau des statistiques
+                st.dataframe(pd.DataFrame(cluster_stats))
+                
+                # Visualiser les centroïdes si clustering 2D
+                if len(selected_features) == 2:
+                    st.subheader("Visualisation des centroïdes")
+                    
+                    fig = px.scatter(
+                        df_result, 
+                        x=selected_features[0], 
+                        y=selected_features[1],
+                        color='cluster',
+                        labels={
+                            selected_features[0]: selected_features[0],
+                            selected_features[1]: selected_features[1]
+                        },
+                        title="Distribution des clusters"
+                    )
+                    
+                    # Ajouter les centroïdes
+                    fig.add_scatter(
+                        x=kmeans.cluster_centers_[:, 0],
+                        y=kmeans.cluster_centers_[:, 1],
+                        mode='markers',
+                        marker=dict(
+                            color='black',
+                            size=15,
+                            symbol='x'
+                        ),
+                        name='Centroïdes'
+                    )
+                    
+                    st.plotly_chart(fig, use_container_width=True)
+    
+    # Interface pour DBSCAN
+    elif algorithm == "DBSCAN":
+        st.subheader("Clustering avec DBSCAN")
+        
+        # Paramètres de DBSCAN
+        eps_meters = st.sidebar.slider("Distance maximale entre points (mètres)", 10, 500, 50)
+        min_samples = st.sidebar.slider("Nombre minimum de points par cluster", 2, 20, 5)
+        
+        # Description de l'algorithme
+        with st.expander("📖 Comment fonctionne DBSCAN ?"):
+            st.markdown("""
+            **DBSCAN** (Density-Based Spatial Clustering of Applications with Noise) est un algorithme de clustering 
+            basé sur la densité qui groupe les points proches ensemble et marque les points isolés comme du bruit.
+            
+            **Fonctionnement**:
+            1. Pour chaque point, trouver tous les points à une distance inférieure à `eps`
+            2. Si un point a au moins `min_samples` voisins, c'est un point central
+            3. Si un point n'est pas central mais est voisin d'un point central, c'est un point de bordure
+            4. Tous les autres points sont considérés comme du bruit
+            
+            **Avantages**:
+            - Ne nécessite pas de spécifier le nombre de clusters à l'avance
+            - Peut trouver des clusters de forme arbitraire
+            - Robuste aux points aberrants (outliers)
+            
+            **Inconvénients**:
+            - Sensible aux paramètres `eps` et `min_samples`
+            - Peut avoir du mal avec des clusters de densités très différentes
+            """)
+        
+        # Bouton pour lancer le clustering
+        if st.button("Lancer DBSCAN"):
+            with st.spinner("Clustering en cours..."):
+                # Convertir eps de mètres à degrés pour les coordonnées géographiques
+                if 'latitude' in selected_features and 'longitude' in selected_features:
+                    # Conversion approximative de mètres à degrés pour la latitude
+                    kms_per_radian = 6371.0088  # Rayon de la Terre en km
+                    epsilon = eps_meters / 1000 / kms_per_radian
+                    
+                    # Utiliser l'algorithme haversine pour les coordonnées géographiques
+                    dbscan = DBSCAN(
+                        eps=epsilon,
+                        min_samples=min_samples,
+                        algorithm='ball_tree',
+                        metric='haversine'
+                    )
+                    
+                    # Extraire et convertir les coordonnées en radians
+                    coords = df[['latitude', 'longitude']].values
+                    coords_rad = np.radians(coords)
+                    
+                    # Appliquer DBSCAN
+                    cluster_labels = dbscan.fit_predict(coords_rad)
+                else:
+                    # Cas non géographique
+                    dbscan = DBSCAN(
+                        eps=eps_meters/100,  # Échelle arbitraire
+                        min_samples=min_samples
+                    )
+                    cluster_labels = dbscan.fit_predict(X)
+                
+                # Afficher les résultats
+                st.subheader("Résultats du clustering")
+                
+                # Ajouter les labels au DataFrame
+                df_result = df.copy()
+                df_result['cluster'] = cluster_labels
+                
+                # Compter le nombre de clusters
+                n_clusters = len(set(cluster_labels)) - (1 if -1 in cluster_labels else 0)
+                n_noise = list(cluster_labels).count(-1)
+                
+                # Informations générales
+                st.info(f"Nombre de clusters trouvés: {n_clusters}")
+                st.info(f"Nombre de points de bruit: {n_noise} ({n_noise/len(df)*100:.1f}%)")
+                
+                # Créer la carte
+                m = display_clustering_map(df, cluster_labels, "DBSCAN", n_clusters)
+                folium_static(m, width=800, height=500)
+                
+                # Afficher les statistiques par cluster
+                if n_clusters > 0:
+                    st.subheader("Statistiques par cluster")
+                    
+                    # Calculer les statistiques par cluster
+                    cluster_stats = []
+                    
+                    # D'abord les clusters
+                    for i in range(n_clusters):
+                        cluster_id = sorted(list(set(cluster_labels) - {-1}))[i]
+                        cluster_data = df_result[df_result['cluster'] == cluster_id]
+                        
+                        stats = {
+                            "Cluster": cluster_id,
+                            "Nombre de points": len(cluster_data),
+                            "% des points": f"{len(cluster_data) / len(df) * 100:.1f}%",
+                            "Centre (lat)": cluster_data['latitude'].mean(),
+                            "Centre (lon)": cluster_data['longitude'].mean()
+                        }
+                        
+                        # Ajouter la vitesse moyenne si disponible
+                        if 'speed' in df.columns:
+                            stats["Vitesse moyenne"] = f"{cluster_data['speed'].mean():.2f} m/s"
+                        
+                        cluster_stats.append(stats)
+                    
+                    # Puis les points de bruit
+                    if n_noise > 0:
+                        noise_data = df_result[df_result['cluster'] == -1]
+                        
+                        stats = {
+                            "Cluster": "Bruit",
+                            "Nombre de points": n_noise,
+                            "% des points": f"{n_noise / len(df) * 100:.1f}%",
+                            "Centre (lat)": noise_data['latitude'].mean() if len(noise_data) > 0 else "N/A",
+                            "Centre (lon)": noise_data['longitude'].mean() if len(noise_data) > 0 else "N/A"
+                        }
+                        
+                        # Ajouter la vitesse moyenne si disponible
+                        if 'speed' in df.columns and len(noise_data) > 0:
+                            stats["Vitesse moyenne"] = f"{noise_data['speed'].mean():.2f} m/s"
+                        
+                        cluster_stats.append(stats)
+                    
+                    # Afficher le tableau des statistiques
+                    st.dataframe(pd.DataFrame(cluster_stats))
+    
+    # Interface pour Voisinage Itératif
+    elif algorithm == "Voisinage Itératif":
+        st.subheader("Analyse de Voisinage Itératif")
+        
+        # Description de l'algorithme
+        with st.expander("📖 Comment fonctionne le Voisinage Itératif ?"):
+            st.markdown("""
+            **Voisinage Itératif** est une méthode alternative aux k plus proches voisins traditionnels.
+            
+            **Fonctionnement**:
+            1. On commence avec un point de référence
+            2. On ajoute itérativement le point le plus proche du voisinage actuel
+            3. À chaque étape, on évalue la proximité selon une méthode de liaison
+            
+            **Méthodes de liaison**:
+            - **Simple**: distance minimale entre un point et n'importe quel point du voisinage actuel
+            - **Complète**: distance maximale entre un point et n'importe quel point du voisinage actuel
+            - **Moyenne**: distance moyenne entre un point et tous les points du voisinage actuel
+            
+            Cela permet de construire des voisinages plus adaptés aux données qui suivent des structures non sphériques.
+            """)
+        
+        # Paramètres du voisinage itératif
+        k_neighbors = st.sidebar.slider("Nombre de voisins (k)", 3, 50, 10)
+        linkage_method = st.sidebar.selectbox(
+            "Méthode de liaison", 
+            ["simple", "complete", "average"],
+            format_func=lambda x: {
+                "simple": "Simple (minimale)",
+                "complete": "Complète (maximale)",
+                "average": "Moyenne"
+            }[x]
+        )
+        
+        # Sélection du point de référence
+        st.subheader("Sélection du point de référence")
+        
+        selection_method = st.radio(
+            "Comment sélectionner le point de référence ?",
+            ["Cliquer sur la carte", "Indice dans le tableau", "Coordonnées personnalisées"]
+        )
+        
+        reference_point = None
+        reference_idx = None
+        
+        if selection_method == "Cliquer sur la carte":
+            # Créer une carte interactive
+            m_select = folium.Map(location=[49.2584, 4.0317], zoom_start=13)
+            
+            # Ajouter tous les points en gris
+            for idx, row in df.iterrows():
+                folium.CircleMarker(
+                    [row['latitude'], row['longitude']],
+                    radius=5,
+                    color='gray',
+                    fill=True,
+                    fill_opacity=0.7,
+                    popup=f"Point {idx}: {row.get('speed', 'N/A')} m/s"
+                ).add_to(m_select)
+            
+            # Afficher la carte pour sélection
+            map_data = st_folium(
+                m_select,
+                width=800,
+                height=400,
+                returned_objects=["last_clicked"],
+                key="select_map"
+            )
+            
+            # Vérifier si un point a été cliqué
+            if map_data and 'last_clicked' in map_data and map_data['last_clicked']:
+                clicked = map_data['last_clicked']
+                clicked_lat, clicked_lng = clicked['lat'], clicked['lng']
+                
+                # Trouver le point le plus proche
+                min_dist = float('inf')
+                closest_idx = None
+                
+                for idx, row in df.iterrows():
+                    dist = np.sqrt((row['latitude'] - clicked_lat)**2 + (row['longitude'] - clicked_lng)**2)
+                    if dist < min_dist:
+                        min_dist = dist
+                        closest_idx = idx
+                
+                if closest_idx is not None:
+                    reference_idx = closest_idx
+                    reference_point = df.loc[closest_idx][selected_features].values
+                    st.success(f"Point sélectionné: indice {closest_idx}")
+        
+        elif selection_method == "Indice dans le tableau":
+            # Afficher un aperçu du DataFrame
+            st.dataframe(df.head(10))
+            
+            # Sélectionner un indice
+            max_idx = len(df) - 1
+            idx = st.number_input("Indice du point de référence", 0, max_idx, 0)
+            
+            reference_idx = idx
+            reference_point = df.iloc[idx][selected_features].values
+        
+        elif selection_method == "Coordonnées personnalisées":
+            # Saisir des coordonnées personnalisées
+            coord_cols = []
+            for feature in selected_features:
+                # Déterminer une valeur par défaut raisonnable
+                default_val = df[feature].mean()
+                col_val = st.number_input(f"{feature}", value=float(default_val), format="%.6f")
+                coord_cols.append(col_val)
+            
+            reference_point = np.array(coord_cols)
+            # Dans ce cas, reference_idx reste None car le point peut ne pas être dans le DataFrame
+        
+        # Bouton pour lancer l'analyse du voisinage
+        if reference_point is not None and st.button("Analyser le voisinage"):
+            with st.spinner("Analyse du voisinage en cours..."):
+                # Données à analyser
+                data_array = df[selected_features].values
+                
+                # Calculer le voisinage itératif
+                neighbors_indices = iterative_neighborhood(
+                    data_array, 
+                    reference_point, 
+                    k_neighbors, 
+                    linkage=linkage_method
+                )
+                
+                # Créer un DataFrame avec les voisins
+                neighbors_df = df.iloc[neighbors_indices].copy()
+                neighbors_df['neighbor_rank'] = range(len(neighbors_indices))
+                
+                # Afficher les résultats
+                st.subheader("Résultats de l'analyse de voisinage")
+                
+                # Informations sur le point de référence
+                st.markdown("#### Point de référence")
+                if reference_idx is not None:
+                    st.dataframe(df.iloc[[reference_idx]])
+                else:
+                    # Point personnalisé
+                    custom_point_df = pd.DataFrame([dict(zip(selected_features, reference_point))])
+                    st.dataframe(custom_point_df)
+                
+                # Créer une carte avec les voisins
+                m_neighbors = folium.Map(
+                    location=[49.2584, 4.0317], 
+                    zoom_start=13
+                )
+                
+                # Ajouter tous les points en gris transparent
+                for idx, row in df.iterrows():
+                    if idx not in neighbors_indices:
+                        folium.CircleMarker(
+                            [row['latitude'], row['longitude']],
+                            radius=3,
+                            color='gray',
+                            fill=True,
+                            fill_opacity=0.3
+                        ).add_to(m_neighbors)
+                
+                # Ajouter le point de référence en rouge et plus gros
+                if reference_idx is not None:
+                    ref_point = df.iloc[reference_idx]
+                    folium.CircleMarker(
+                        [ref_point['latitude'], ref_point['longitude']],
+                        radius=8,
+                        color='red',
+                        fill=True,
+                        fill_opacity=0.8,
+                        popup="Point de référence"
+                    ).add_to(m_neighbors)
+                
+                # Ajouter les voisins avec une couleur selon leur rang
+                colors = px.colors.sequential.Viridis
+                for idx, row in neighbors_df.iterrows():
+                    rank = row['neighbor_rank']
+                    if idx != reference_idx:  # Ne pas redessiner le point de référence
+                        # Couleur dégradée selon le rang
+                        color_idx = min(int(rank / k_neighbors * (len(colors) - 1)), len(colors) - 1)
+                        color = colors[color_idx]
+                        
+                        folium.CircleMarker(
+                            [row['latitude'], row['longitude']],
+                            radius=6,
+                            color=color,
+                            fill=True,
+                            fill_opacity=0.7,
+                            popup=f"Voisin {rank}: {row.get('speed', 'N/A')} m/s"
+                        ).add_to(m_neighbors)
+                
+                # Tracer les liaisons entre les voisins
+                # D'abord, ajouter une ligne du point de référence au premier voisin
+                if len(neighbors_indices) > 1 and reference_idx is not None:
+                    ref_point = df.iloc[reference_idx]
+                    first_neighbor = neighbors_df[neighbors_df['neighbor_rank'] == 1].iloc[0]
+                    
+                    folium.PolyLine(
+                        [(ref_point['latitude'], ref_point['longitude']),
+                         (first_neighbor['latitude'], first_neighbor['longitude'])],
+                        color='blue',
+                        weight=2,
+                        opacity=0.7,
+                        dash_array='5, 5'
+                    ).add_to(m_neighbors)
+                
+                # Ensuite, tracer les liaisons entre voisins consécutifs
+                for i in range(1, len(neighbors_indices) - 1):
+                    curr_neighbor = neighbors_df[neighbors_df['neighbor_rank'] == i].iloc[0]
+                    next_neighbor = neighbors_df[neighbors_df['neighbor_rank'] == i + 1].iloc[0]
+                    
+                    folium.PolyLine(
+                        [(curr_neighbor['latitude'], curr_neighbor['longitude']),
+                         (next_neighbor['latitude'], next_neighbor['longitude'])],
+                        color='blue',
+                        weight=2,
+                        opacity=0.7,
+                        dash_array='5, 5'
+                    ).add_to(m_neighbors)
+                
+                # Afficher la carte
+                folium_static(m_neighbors, width=800, height=500)
+                
+                # Tableau des voisins
+                st.subheader("Liste des voisins")
+                st.dataframe(neighbors_df)
+                
+                # Visualiser l'évolution des distances
+                if len(neighbors_df) > 1:
+                    st.subheader("Évolution des distances")
+                    
+                    # Calculer les distances entre voisins consécutifs
+                    distances = []
+                    
+                    # Distance au point de référence
+                    for i, row in neighbors_df.iterrows():
+                        if reference_idx is not None and i == reference_idx:
+                            # C'est le point de référence lui-même
+                            dist = 0
+                        else:
+                            # Calculer la distance euclidienne
+                            point_coords = row[selected_features].values
+                            dist = np.linalg.norm(point_coords - reference_point)
+                        
+                        distances.append({
+                            'neighbor_rank': row['neighbor_rank'],
+                            'distance': dist
+                        })
+                    
+                    # Créer un DataFrame pour le graphique
+                    distances_df = pd.DataFrame(distances)
+                    
+                    # Graphique des distances
+                    fig = px.line(
+                        distances_df,
+                        x='neighbor_rank',
+                        y='distance',
+                        markers=True,
+                        labels={'neighbor_rank': 'Rang du voisin', 'distance': 'Distance au point de référence'},
+                        title=f"Évolution des distances avec la méthode de liaison '{linkage_method}'"
+                    )
+                    
+                    st.plotly_chart(fig, use_container_width=True)
+                    
+                    # Tableau récapitulatif
+                    st.subheader("Statistiques sur les voisins")
+                    
+                    # Calculer des statistiques sur les distances
+                    stats = {
+                        # Cette partie complète le code que vous avez déjà fourni
+# À ajouter à la fin de votre fichier, après la ligne "stats = {"Distance moyenne": np.mean([d['distance"
+
+                        "Distance moyenne": np.mean([d['distance'] for d in distances]),
+                        "Distance minimale": np.min([d['distance'] for d in distances]),
+                        "Distance maximale": np.max([d['distance'] for d in distances]),
+                        "Écart-type des distances": np.std([d['distance'] for d in distances])
+                    }
+                    
+                    # Afficher les statistiques
+                    st.table(pd.DataFrame([stats]))
+                    
+                    # Comparaison avec les k plus proches voisins traditionnels
+                    st.subheader("Comparaison avec les k plus proches voisins traditionnels")
+                    
+                    # Calculer les k plus proches voisins traditionnels
+                    nn = NearestNeighbors(n_neighbors=k_neighbors)
+                    nn.fit(data_array)
+                    
+                    # Trouver les voisins du point de référence
+                    if reference_idx is not None:
+                        trad_distances, trad_indices = nn.kneighbors([data_array[reference_idx]])
+                    else:
+                        trad_distances, trad_indices = nn.kneighbors([reference_point])
+                    
+                    # Créer un DataFrame avec les voisins traditionnels
+                    trad_neighbors_df = df.iloc[trad_indices[0]].copy()
+                    trad_neighbors_df['neighbor_rank'] = range(len(trad_indices[0]))
+                    trad_neighbors_df['distance'] = trad_distances[0]
+                    
+                    # Comparer les deux méthodes
+                    iterative_indices = set(neighbors_indices)
+                    traditional_indices = set(trad_indices[0])
+                    
+                    common_indices = iterative_indices.intersection(traditional_indices)
+                    iterative_only = iterative_indices - traditional_indices
+                    traditional_only = traditional_indices - iterative_indices
+                    
+                    # Afficher les statistiques de comparaison
+                    comparison_stats = {
+                        "Voisins communs": len(common_indices),
+                        "Voisins seulement itératifs": len(iterative_only),
+                        "Voisins seulement traditionnels": len(traditional_only),
+                        "Pourcentage de concordance": f"{len(common_indices) / k_neighbors * 100:.1f}%"
+                    }
+                    
+                    st.table(pd.DataFrame([comparison_stats]))
+                    
+                    # Visualiser la différence sur une carte
+                    st.subheader("Comparaison visuelle des deux méthodes")
+                    
+                    # Créer une carte pour la comparaison
+                    m_comp = folium.Map(
+                        location=[df['latitude'].mean(), df['longitude'].mean()], 
+                        zoom_start=13
+                    )
+                    
+                    # Ajouter tous les points en gris transparent
+                    for idx, row in df.iterrows():
+                        if idx not in iterative_indices and idx not in traditional_indices:
+                            folium.CircleMarker(
+                                [row['latitude'], row['longitude']],
+                                radius=3,
+                                color='gray',
+                                fill=True,
+                                fill_opacity=0.3
+                            ).add_to(m_comp)
+                    
+                    # Ajouter le point de référence en noir et plus gros
+                    if reference_idx is not None:
+                        ref_point = df.iloc[reference_idx]
+                        folium.CircleMarker(
+                            [ref_point['latitude'], ref_point['longitude']],
+                            radius=8,
+                            color='black',
+                            fill=True,
+                            fill_opacity=0.8,
+                            popup="Point de référence"
+                        ).add_to(m_comp)
+                    
+                    # Ajouter les voisins communs en vert
+                    for idx in common_indices:
+                        if idx != reference_idx:  # Ne pas redessiner le point de référence
+                            row = df.iloc[idx]
+                            folium.CircleMarker(
+                                [row['latitude'], row['longitude']],
+                                radius=6,
+                                color='green',
+                                fill=True,
+                                fill_opacity=0.7,
+                                popup=f"Voisin commun {row.get('speed', 'N/A')} m/s"
+                            ).add_to(m_comp)
+                    
+                    # Ajouter les voisins seulement itératifs en bleu
+                    for idx in iterative_only:
+                        row = df.iloc[idx]
+                        folium.CircleMarker(
+                            [row['latitude'], row['longitude']],
+                            radius=6,
+                            color='blue',
+                            fill=True,
+                            fill_opacity=0.7,
+                            popup=f"Voisin itératif {row.get('speed', 'N/A')} m/s"
+                        ).add_to(m_comp)
+                    
+                    # Ajouter les voisins seulement traditionnels en rouge
+                    for idx in traditional_only:
+                        row = df.iloc[idx]
+                        folium.CircleMarker(
+                            [row['latitude'], row['longitude']],
+                            radius=6,
+                            color='red',
+                            fill=True,
+                            fill_opacity=0.7,
+                            popup=f"Voisin traditionnel {row.get('speed', 'N/A')} m/s"
+                        ).add_to(m_comp)
+                    
+                    # Ajouter une légende à la carte
+                    legend_html = '''
+                    <div style="position: fixed; 
+                        bottom: 50px; right: 50px; z-index: 1000;
+                        background-color: white; padding: 10px; border-radius: 5px;
+                        border: 2px solid grey;">
+                        <h4>Légende</h4>
+                        <div><i style="background: black; width: 15px; height: 15px; display: inline-block; border-radius: 50%;"></i> Point de référence</div>
+                        <div><i style="background: green; width: 15px; height: 15px; display: inline-block; border-radius: 50%;"></i> Voisins communs</div>
+                        <div><i style="background: blue; width: 15px; height: 15px; display: inline-block; border-radius: 50%;"></i> Voisins seulement itératifs</div>
+                        <div><i style="background: red; width: 15px; height: 15px; display: inline-block; border-radius: 50%;"></i> Voisins seulement traditionnels</div>
+                    </div>
+                    '''
+                    m_comp.get_root().html.add_child(folium.Element(legend_html))
+                    
+                    # Afficher la carte
+                    folium_static(m_comp, width=800, height=500)
+                    
+                    # Analyse des différences
+                    st.subheader("Analyse des différences entre les méthodes")
+                    
+                    # Calculer la distance moyenne des voisins par méthode
+                    if len(iterative_only) > 0:
+                        iterative_dist = [np.linalg.norm(data_array[idx] - reference_point) for idx in iterative_only]
+                        iterative_avg_dist = np.mean(iterative_dist)
+                    else:
+                        iterative_avg_dist = 0
+                    
+                    if len(traditional_only) > 0:
+                        traditional_dist = [np.linalg.norm(data_array[idx] - reference_point) for idx in traditional_only]
+                        traditional_avg_dist = np.mean(traditional_dist)
+                    else:
+                        traditional_avg_dist = 0
+                    
+                    if len(common_indices) > 0:
+                        common_dist = [np.linalg.norm(data_array[idx] - reference_point) for idx in common_indices]
+                        common_avg_dist = np.mean(common_dist)
+                    else:
+                        common_avg_dist = 0
+                    
+                    # Afficher les statistiques de distance
+                    distance_stats = {
+                        "Distance moyenne des voisins communs": f"{common_avg_dist:.4f}",
+                        "Distance moyenne des voisins seulement itératifs": f"{iterative_avg_dist:.4f}",
+                        "Distance moyenne des voisins seulement traditionnels": f"{traditional_avg_dist:.4f}"
+                    }
+                    
+                    st.table(pd.DataFrame([distance_stats]))
+                    
+                    # Conclusion
+                    st.markdown("""
+                    #### Interprétation des résultats
+                    
+                    La méthode de voisinage itératif peut révéler des structures différentes de celles
+                    identifiées par les k plus proches voisins traditionnels:
+                    
+                    - Les voisins itératifs tendent à suivre des chemins ou structures dans les données
+                    - Les voisins traditionnels sont simplement les plus proches en distance euclidienne
+                    
+                    La différence est particulièrement visible quand les données forment des structures
+                    non sphériques comme des lignes, des courbes ou des clusters allongés.
+                    """)
+
+# --- Ajout de l'onglet dans la barre latérale ---
+def add_clustering_to_sidebar():
+    # Cette fonction doit être appelée dans le code principal pour ajouter l'onglet à la barre latérale
+    
+    # Code à intégrer dans le fichier principal
+    # Dans la section où vous définissez la navigation dans la barre latérale
+    page = st.sidebar.selectbox(
+        "Choisir une page",
+        ["Carte principale", "Analyse de vitesse", "Clusters", "Anomalies", "Statistiques", "Configuration", "Clustering Avancé"]
+    )
+    
+    # Et dans la section où vous gérez les pages
+    if page == "Clustering Avancé":
+        show_advanced_clustering_page()
+                                                       
 # ---------------------------------------------------
 # 4. Fonctions d'analyse ML
 # ---------------------------------------------------
@@ -456,7 +1351,7 @@ def analyser_ralentissement_async(speed, avg_speed):
 def display_anomaly_results(df_anomalies):
                 # Création de la carte avec anomalies
                 m_anomalies = folium.Map(
-                    location=[df_anomalies['latitude'].mean(), df_anomalies['longitude'].mean()], 
+                    location=[49.2584, 4.0317], 
                     zoom_start=14
                 )
                 
@@ -673,13 +1568,14 @@ def get_latest_point():
 # --- Interface utilisateur Streamlit ---
 
 # Titre de l'application
-st.title("Tableau de bord d'analyse de données spatiales")
+st.title("🗺️ Suivi de Trajectoire et Analyse de Données")
 
 # Barre latérale pour la navigation
+
 st.sidebar.title("Navigation")
 page = st.sidebar.selectbox(
     "Choisir une page",
-    ["Carte principale", "Analyse de vitesse", "Clusters", "Anomalies", "Statistiques", "Configuration"]
+    ["Carte principale", "Analyse de vitesse", "Clusters", "Anomalies", "Statistiques", "Configuration", "Clustering Avancé"]
 )
 # Charger les données
 @st.cache_data(ttl=10)  # Cache pendant 10 secondes
@@ -701,15 +1597,18 @@ if len(df) == 0:
 
 # Fonction pour créer une carte avec points
 def create_map_with_points(df, center=None, zoom=14):
-    if len(df) == 0:
-        # Coordonnées par défaut (Reims)
-        center = [49.2484420, 4.0415017]
-        m = folium.Map(location=center, zoom_start=zoom)
+    # Coordonnées précises du centre de Reims
+    default_center = [49.2584, 4.0317]
+    
+    if len(df) == 0 or (len(df) < 5 and not any(df['latitude'].between(49.20, 49.30)) and not any(df['longitude'].between(4.00, 4.10))):
+        # Utiliser les coordonnées par défaut de Reims si pas de données 
+        # ou si les données ne semblent pas être dans la région de Reims
+        m = folium.Map(location=default_center, zoom_start=zoom)
         return m
     
     if center is None:
-        # Utiliser le centre des données
-        center = [df['latitude'].mean(), df['longitude'].mean()]
+        # Si aucun centre n'est spécifié, utiliser le centre de Reims ou le centre des données
+        center = default_center if len(df) < 5 else [df['latitude'].mean(), df['longitude'].mean()]
     
     m = folium.Map(location=center, zoom_start=zoom)
     
@@ -748,7 +1647,19 @@ def create_map_with_points(df, center=None, zoom=14):
 # 2. Améliorer l'analyse des segments
 
 if page == "Carte principale":
-    st.header("Carte interactive")
+    # Titre et introduction dynamique
+    st.markdown("# 🗺️ Tableau de Bord de Trajectoire")
+    
+    # Bannière d'information
+    st.markdown("""
+    <div style='background-color:#f0f2f6; padding:15px; border-radius:10px;'>
+    📍 **Bienvenue sur votre tableau de bord de suivi de trajectoire !**
+    
+    - 🚀 Explorez vos déplacements en temps réel
+    - 📊 Analysez vos données de mouvement
+    - 🔍 Sélectionnez et segmentez votre trajectoire
+    </div>
+    """, unsafe_allow_html=True)
     
     # Disposition en colonnes
     col1, col2 = st.columns([3, 1])
@@ -759,7 +1670,7 @@ if page == "Carte principale":
     
     with col1:
         # Créer une carte avec possibilité de clic
-        center = [df['latitude'].mean(), df['longitude'].mean()] if len(df) > 0 else [49.2484420, 4.0415017]
+        center = [49.2584, 4.0317]
         
         # Créer une carte Folium
         m = folium.Map(location=center, zoom_start=14)
@@ -872,34 +1783,81 @@ if page == "Carte principale":
             
             if not selected_existing_point:
                 st.success(f"📍 Nouveau point sélectionné: Lat {selected_lat:.6f}, Lng {selected_lng:.6f}")
+            st.markdown("""
+        ### 🗺️ Légende de la Carte
+        - 🔘 Points gris : Points de trajectoire existants
+        - 🔵 Points bleus : Points sélectionnés
+        - 📏 Lignes bleues : Segments de trajectoire
+        """)
     
     with col2:
-        # Métriques principales
-        st.subheader("Informations générales")
+        # Améliorer la section d'informations
+        st.markdown("## 📊 Tableau de Bord")
         
         if len(df) > 0:
+            # Cartes de métriques plus détaillées
+            st.markdown("### Métriques Principales")
+            
+            # Carte de métriques avec des icônes et des couleurs
             latest = df.iloc[-1]
-            st.metric("Points enregistrés", len(df))
-            st.metric("Dernière vitesse", f"{latest['speed']:.2f} m/s")
-            
-            # Calcul de la vitesse moyenne
             avg_speed = df['speed'].mean()
-            st.metric("Vitesse moyenne", f"{avg_speed:.2f} m/s")
             
-            # Afficher l'explication IA si disponible
+            # Évaluation de la performance
+            def get_speed_category(speed):
+                if speed < 2:
+                    return "🐌 Lent", "warning"
+                elif speed < 5:
+                    return "🚶 Modéré", "info"
+                elif speed < 10:
+                    return "🚲 Rapide", "success"
+                else:
+                    return "🏎️ Très rapide", "danger"
+            
+            speed_category, color = get_speed_category(latest['speed'])
+            
+            metrics = [
+                {"label": "Points enregistrés", "value": len(df), "icon": "📍"},
+                {"label": "Dernière vitesse", "value": f"{latest['speed']:.2f} m/s", "icon": "🚀"},
+                {"label": "Vitesse moyenne", "value": f"{avg_speed:.2f} m/s", "icon": "📊"},
+                {"label": "Catégorie de vitesse", "value": speed_category, "icon": "🏁"}
+            ]
+            
+            for metric in metrics:
+                st.markdown(f"""
+                <div style='background-color:rgba(0,123,255,0.1); 
+                            border-left: 4px solid #007bff; 
+                            padding:10px; 
+                            margin-bottom:10px; 
+                            border-radius:5px;'>
+                {metric['icon']} <strong>{metric['label']}</strong>
+                <p style='margin:0; font-size:1.2em;'>{metric['value']}</p>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            # Section d'explication IA
             if st.session_state.current_explanation != "Pas d'analyse disponible.":
+                st.markdown("""
+                ### 🤖 Analyse IA
+                """)
                 st.info(f"**Explication IA:** {st.session_state.current_explanation}")
             
-            # Ajouter un indicateur de statut ML
+            # Statut des modèles ML
+            st.markdown("### 🧠 Modèles Machine Learning")
             if st.session_state.ml_models['is_trained']:
-                st.success("Modèles ML: Entraînés")
+                st.success("✅ Modèles ML entraînés et opérationnels")
             else:
-                st.warning("Modèles ML: Non entraînés")
-        else:
-            st.info("Aucune donnée disponible")
+                st.warning("⚠️ Modèles ML non entraînés")
         
-        # Instructions pour l'utilisateur
-        st.info("📌 **Instructions**: Cliquez sur la carte ou sur un point de trajectoire existant pour le sélectionner, puis ajoutez-le à votre segment")
+        else:
+            st.info("🚫 Aucune donnée disponible. Commencez à collecter des points !")
+        
+        # Instructions stylisées
+        st.markdown("""
+        ### 🎯 Comment utiliser
+        1. Cliquez sur la carte
+        2. Sélectionnez des points
+        3. Analysez votre trajectoire
+        """)
         
         # Afficher les coordonnées du point sélectionné et proposer d'ajouter ce point
         if selected_lat is not None and selected_lng is not None:
@@ -1301,7 +2259,7 @@ elif page == "Analyse de vitesse":
         st.subheader("Carte de chaleur des vitesses")
         
         # Créer une carte folium pour la heatmap
-        m_heat = folium.Map(location=[df['latitude'].mean(), df['longitude'].mean()], zoom_start=14)
+        m_heat = folium.Map(location=[49.2584, 4.0317], zoom_start=14)
         
         # Préparer les données pour la heatmap (lat, lon, speed comme poids)
         heat_data = [[row['latitude'], row['longitude'], row['speed']] for _, row in df.iterrows()]
@@ -1375,7 +2333,7 @@ elif page == "Clusters":
                     df_clusters['cluster'] = db.labels_
                     
                     # Création de la carte avec clusters
-                    m_clusters = folium.Map(location=[df['latitude'].mean(), df['longitude'].mean()], zoom_start=14)
+                    m_clusters = folium.Map(location=[49.2584, 4.0317], zoom_start=14)
                     
                     # Couleurs pour les clusters
                     colors = ['red', 'blue', 'green', 'purple', 'orange', 'darkred', 
@@ -2023,7 +2981,8 @@ elif page == "Configuration":
                             st.error("Échec de l'entraînement des modèles ML")
                     else:
                         st.error("Pas assez de données pour l'entraînement (minimum 10 points)")
-
+elif page == "Clustering Avancé":
+    show_advanced_clustering_page()
 # Démarrer le serveur Flask à la fin de votre fichier
 if __name__ == "__main__":
     # Démarrer Flask dans un thread séparé
