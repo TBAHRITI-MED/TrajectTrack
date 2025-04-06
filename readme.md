@@ -1,6 +1,6 @@
 # 🗺️ Application de Suivi de Trajectoire et Analyse de Données
 
-![Bannière du projet](https://github.com/user/repo/banner.png)
+![Bannière du projet](/Users/mohammedtbahriti/Desktop/dashboard_fouchal/banner.png)
 
 ## 📋 Vue d'ensemble
 
